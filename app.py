@@ -19,17 +19,21 @@ CORS(app)  # Enable CORS for all routes
 # Check for API key first
 api_key = os.getenv('GOOGLE_API_KEY')
 if not api_key:
-    logger.error("GOOGLE_API_KEY not found in environment variables!")
-    logger.error("Please create a .env file with your GOOGLE_API_KEY")
-    exit(1)
+    logger.warning("GOOGLE_API_KEY not found in environment variables!")
+    # Don't exit on Vercel, just log the warning
+    # exit(1)
 
 try:
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash-exp",
-        google_api_key=api_key,
-        temperature=0.7,
-        max_tokens=1000
-    )
+    if api_key:
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash-exp",
+            google_api_key=api_key,
+            temperature=0.7,
+            max_tokens=1000
+        )
+    else:
+        llm = None
+        logger.warning("LLM not initialized due to missing API key")
     
     prompt_template = ChatPromptTemplate.from_messages([
         ("system","""You are a helpful and friendly chatbot who acts like a sports journalist specialized in cricket. Keep your responses:
@@ -54,22 +58,30 @@ try:
             message_histories[session_id] = ChatMessageHistory()
         return message_histories[session_id]
 
-    conversational_runnable = RunnableWithMessageHistory(
-        runnable=prompt_template | llm,
-        get_session_history=get_session_history,
-        input_messages_key="input",
-        history_messages_key="history",
-    )
-    
-    logger.info("Successfully initialized LangChain chatbot")
+    if llm:
+        conversational_runnable = RunnableWithMessageHistory(
+            runnable=prompt_template | llm,
+            get_session_history=get_session_history,
+            input_messages_key="input",
+            history_messages_key="history",
+        )
+        logger.info("Successfully initialized LangChain chatbot")
+    else:
+        conversational_runnable = None
+        logger.warning("Conversational runnable not initialized")
 
 except Exception as e:
     logger.error(f"Failed to initialize the language model: {e}")
-    exit(1)
+    conversational_runnable = None
+    # Don't exit on Vercel
+    # exit(1)
 
 
 def get_langchain_response(message, user_id, player_name="", player_id=""):
     try:
+        if not conversational_runnable:
+            return "Sorry, the chatbot service is not available right now. Please check API key configuration."
+            
         # Get conversation chain for this user
         conversation = conversational_runnable.invoke(
             {
@@ -135,8 +147,12 @@ def chat():
         logger.error(f"Error in chat endpoint: {str(e)}")
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
+# Export app for Vercel
+handler = app
+
 if __name__ == '__main__':
-    message_histories.clear()
+    if 'message_histories' in globals():
+        message_histories.clear()
     # Verify environment variables
     required_vars = ['GOOGLE_API_KEY']
     missing_vars = [var for var in required_vars if not os.getenv(var)]
@@ -145,5 +161,5 @@ if __name__ == '__main__':
         logger.error(f"Missing environment variables: {missing_vars}")
         exit(1)
     
-    logger.info("Starting WhatsApp Chatbot with LangChain + Gemini 2.0 Flash...")
+    logger.info("Starting Cricket Dashboard Chatbot with LangChain + Gemini 2.0 Flash...")
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)
