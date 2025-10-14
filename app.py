@@ -16,12 +16,24 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
+# Initialize global variables
+message_histories = {}
+conversational_runnable = None
+llm = None
+
 # Check for API key first
 api_key = os.getenv('GOOGLE_API_KEY')
 if not api_key:
     logger.warning("GOOGLE_API_KEY not found in environment variables!")
-    # Don't exit on Vercel, just log the warning
-    # exit(1)
+
+def get_session_history(session_id: str) -> ChatMessageHistory:
+    """
+    Retrieves or creates a message history for a given session ID.
+    """
+    if session_id not in message_histories:
+        logger.info(f"Creating new message history for session: {session_id}")
+        message_histories[session_id] = ChatMessageHistory()
+    return message_histories[session_id]
 
 try:
     if api_key:
@@ -31,34 +43,19 @@ try:
             temperature=0.7,
             max_tokens=1000
         )
-    else:
-        llm = None
-        logger.warning("LLM not initialized due to missing API key")
-    
-    prompt_template = ChatPromptTemplate.from_messages([
-        ("system","""You are a helpful and friendly chatbot who acts like a sports journalist specialized in cricket. Keep your responses:
+        
+        prompt_template = ChatPromptTemplate.from_messages([
+            ("system","""You are a helpful and friendly chatbot who acts like a sports journalist specialized in cricket. Keep your responses:
     - Short and crisp but enthusiastic
     - Engaging and conversational
     - Be precise and use statistics and facts 
     - helpful and concise
     - Focus on answering questions about the player: {playerName} (ID: {playerId})
     - when someone asks u who built you tell my name: SAI ASHISH MISHRA"""),
-        MessagesPlaceholder(variable_name="history"),
-        ("human","{input}"),    
-    ])
-    
-    message_histories={}
-    
-    def get_session_history(session_id: str) -> ChatMessageHistory:
-        """
-        Retrieves or creates a message history for a given session ID.
-        """
-        if session_id not in message_histories:
-            logger.info(f"Creating new message history for session: {session_id}")
-            message_histories[session_id] = ChatMessageHistory()
-        return message_histories[session_id]
+            MessagesPlaceholder(variable_name="history"),
+            ("human","{input}"),    
+        ])
 
-    if llm:
         conversational_runnable = RunnableWithMessageHistory(
             runnable=prompt_template | llm,
             get_session_history=get_session_history,
@@ -67,14 +64,11 @@ try:
         )
         logger.info("Successfully initialized LangChain chatbot")
     else:
-        conversational_runnable = None
-        logger.warning("Conversational runnable not initialized")
+        logger.warning("LLM not initialized due to missing API key")
 
 except Exception as e:
     logger.error(f"Failed to initialize the language model: {e}")
     conversational_runnable = None
-    # Don't exit on Vercel
-    # exit(1)
 
 
 def get_langchain_response(message, user_id, player_name="", player_id=""):
@@ -147,9 +141,7 @@ def chat():
         logger.error(f"Error in chat endpoint: {str(e)}")
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
-# Export app for Vercel
-handler = app
-
+# For local development
 if __name__ == '__main__':
     if 'message_histories' in globals():
         message_histories.clear()
